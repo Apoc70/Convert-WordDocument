@@ -3,10 +3,7 @@
     PowerShell script to convert Word documents
 
     .Description
-
-    This script converts Word compatible documents to a selected format utilizing the Word SaveAs function. Each file is converted by a single dedicated Word COM instance.
-
-    The script converts either all documents in a single folder of a matching an include filter or a single file.
+    Convert a collection of Word compatible documents to a selected format, using SaveAs in Word.
 
     Currently supported target document types:
     - Default --> Word 2016
@@ -14,9 +11,8 @@
     - XPS
     - HTML
 
-    Author: Thomas Stensitzki
-    
-    Version 1.0 2017-08-31
+    Version 1.0 2017-08-31 - Thomas Stensitzki - Initial Release
+    PROPOSED Version 2.0 2019-05-24 - Ali Robertson's Fork 
     
     .NOTES 
   
@@ -26,21 +22,28 @@
     Revision History 
     -------------------------------------------------------------------------------- 
     1.0      Initial release
+    2.0      Copy file attributes from old to new file. Add InstancePerFile, ContinueOnError, and fix DeleteExistingFiles. 
 
     .LINK
     https://www.granikos.eu/en/justcantgetenough/PostId/353/convert-word-documents-using-powershell
 
     .PARAMETER SourcePath
     Source path to a folder containing the documents to convert or full path to a single document
-
+    
     .PARAMETER IncludeFilter
-    File extension filter when converting all files  in a single folder. Default: *.doc
+    File extension filter when converting all files in a single folder. Default: *.doc
 
     .PARAMETER TargetFormat
     Word Save AS target format. Currently supported: Default, PDF, XPS, HTML
 
     .PARAMETER DeleteExistingFiles
     Switch to delete an exiting target file
+    .
+    .PARAMETER ContinueOnError
+    If a file conversion fails, carry on to next file
+
+    .PARAMETER InstancePerFile
+    Creates a new instance of the word application per file. Can be useful for larger/slower migrations.
 
     .EXAMPLE
     Convert all .doc files in E:\temp to Default
@@ -64,7 +67,9 @@
     [string]$IncludeFilter = '*.doc',
     [ValidateSet('Default','PDF','XPS','HTML')] # Only some of the supported file formats are currently tested
     [string]$TargetFormat = 'Default',
-    [switch]$DeleteExistingFiles
+    [switch]$DeleteExistingFiles,
+    [switch]$ContinueOnError,
+    [switch]$InstancePerFile
   )
 
   $ERR_OK = 0
@@ -113,6 +118,16 @@
     'XPS' = '.xps'
   }
 
+  try{
+    # New Word instance
+    $WordApplication = New-Object -ComObject Word.Application
+  }
+  catch {
+    Write-Error -Message 'Word COM object could not be loaded'
+    Exit $ERR_COMOBJECT
+  }
+
+
   function Invoke-Word {
   [CmdletBinding()]
   Param(
@@ -122,90 +137,72 @@
     [int]$WdSaveFormat = 16, # Default to docx
     [switch]$DeleteFile
   )
-
     if($FileSourcePath -ne '') {
-
       Write-Output ('Working on {0}' -f $FileSourcePath)
-     
-      # define variable for Word com object
-      $WordApplication = $null
-
-      # try to create a new instance of the COM object
-      try{
-        # New Word instance
-        $WordApplication = New-Object -ComObject Word.Application
-      }
-      catch {
-        Write-Error -Message 'Word COM object could not be loaded'
-        Exit $ERR_COMOBJECT
-      }
-
-      # try to ope the document and save in new format
       try {
-
+        $SourceFile = ls $FileSourcePath
+        $lastAccessTime = $SourceFile.LastAccessTime
+        
         $WordDocument = $WordApplication.Documents.Open($FileSourcePath)
-
-        # Replace the source file extenson with the appropriate target file extension 
         $NewFilePath = ($FileSourcePath).Replace($SourceFileExtension, $TargetFileExtension)
-
-        if((Test-Path -Path $NewFilePath) -and $DeleteFile) {
-          
-          # Delete existing file
-          $null = Remove-Item -Path $NewFilePath -Force -Confirm:$false
-
-        }
-
-        # Now let's save the document
         $WordDocument.SaveAs([ref] $NewFilePath, [ref]$WdSaveFormat)
-
-      }
-      catch {
-
-        # Ooops
-        Write-Error -Message "Error saving document$($FileSourcePath): ´nException: $($_.Exception.Message)"
-        Exit $ERR_WORDSAVEAS
-
-      }
-      finally{
-
-        # Do some clean up
         $WordDocument.Close()
         [GC]::Collect()
 
+        $NewFile = ls $NewFilePath
+        $NewFile.CreationTime = $SourceFile.CreationTime
+        $NewFile.LastWriteTime = $SourceFile.LastWriteTime
+        $NewFile.LastAccessTime = $lastAccessTime
+
+        if((Test-Path -Path $NewFilePath) -and $DeleteFile) {          
+          $null = Remove-Item -Path $FileSourcePath -Force -Confirm:$false
+        }
+      }
+      catch {
+        Write-Error -Message "Error saving document $($FileSourcePath): Â´nException: $($_.Exception.Message)"
+        $WordDocument.Close()
+        [GC]::Collect()
+        if($ContinueOnError -ne $true) {
+            Exit $ERR_WORDSAVEAS
+        }
       }
     }
   }
 
   if($SourcePath -ne '') {
-
-    # Check whether SourcePath is a single file or directory
     $IsFolder = $false
     try {
       $IsFolder = ((Get-Item -Path $SourcePath ) -is [System.IO.DirectoryInfo])
     }
     catch{}
-
     if($IsFolder) {
-
-      # We need to iterate a source folder
       $SourceFiles = Get-ChildItem -Path $SourcePath -Include $IncludeFilter -Recurse
-
       Write-Verbose -Message ('{0} files found in {1}' -f ($SourceFiles | Measure-Object).Count, $SourcePath)
-
-      # Let's work on all files
       foreach($File in $SourceFiles) {
-
-        Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
-        
+        if($InstancePerFile) {
+            try{
+                # New Word instance
+                $WordApplication = New-Object -ComObject Word.Application
+            }
+            catch {
+                Write-Error -Message 'Word COM object could not be loaded'
+                Exit $ERR_COMOBJECT
+            }
+        }
+        if($DeleteExistingFiles) {
+            Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat) -DeleteFile
+        } else {
+            Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat) 
+        }
       }
     }
     else{
-      # It's just a single file
-
-      $File = Get-Item -Path $SourcePath
-
+       $File = Get-Item -Path $SourcePath
+       if($DeleteExistingFiles) {
+            Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat) -DeleteFile
+       } else {
         Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
-
+       }
     }
   }
   else {
