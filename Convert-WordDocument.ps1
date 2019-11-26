@@ -6,7 +6,7 @@
 
     This script converts Word compatible documents to a selected format utilizing the Word SaveAs function. Each file is converted by a single dedicated Word COM instance.
 
-    The script converts either all documents in a single folder of a matching an include filter or a single file.
+    The script converts either all documents ina singlefolder of a matching an include filter or a single file.
 
     Currently supported target document types:
     - Default --> Word 2016
@@ -16,7 +16,7 @@
 
     Author: Thomas Stensitzki
     
-    Version 1.0 2017-08-31
+    Version 1.1 2019-11-26
     
     .NOTES 
   
@@ -26,9 +26,10 @@
     Revision History 
     -------------------------------------------------------------------------------- 
     1.0      Initial release
+    1.1      Updated Word cleanup code
 
     .LINK
-    https://www.granikos.eu/en/justcantgetenough/PostId/353/convert-word-documents-using-powershell
+    http://scripts.granikos.eu
 
     .PARAMETER SourcePath
     Source path to a folder containing the documents to convert or full path to a single document
@@ -119,7 +120,7 @@
     [string]$FileSourcePath = '',
     [string]$SourceFileExtension = '',
     [string]$TargetFileExtension = '',
-    [int]$WdSaveFormat = 16, # Default to docx
+    [int]$WdSaveFormat = 16, # Default docx
     [switch]$DeleteFile
   )
 
@@ -169,9 +170,17 @@
       finally{
 
         # Do some clean up
+        # 2019-11-26 Updated
         $WordDocument.Close()
-        [GC]::Collect()
+        $WordApplication.Quit()
+        [Runtime.Interopservices.Marshal]::ReleaseComObject($WordApplication) | Out-Null
 
+        if(Test-Path variable:global:WordApplication) {
+          Remove-Variable -Name WordApplication -Scope Global 4>$Null
+        }
+        
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
       }
     }
   }
