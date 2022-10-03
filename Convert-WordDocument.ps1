@@ -15,18 +15,21 @@
     - HTML
 
     Author: Thomas Stensitzki
+	Minor edits: Gabriel Barcelo
     
-    Version 1.1 2019-11-26
+    Version 1.2 2022-10-03
     
     .NOTES 
   
     Requirements 
-    - Word 2016+ installed locally
+    - Word 2016+/Word 365 installed locally
 
     Revision History 
     -------------------------------------------------------------------------------- 
     1.0      Initial release
     1.1      Updated Word cleanup code
+	1.2      Disabled Macro execution, i.e. AutoOpen()
+	         Added -ResetTemplate option
 
     .LINK
     http://scripts.granikos.eu
@@ -42,6 +45,9 @@
 
     .PARAMETER DeleteExistingFiles
     Switch to delete an exiting target file
+	
+	.PARAMETER ResetTemplate
+	Reset doc to Normal Template. Use in case of very old documents, which may have broken link to template
 
     .EXAMPLE
     Convert all .doc files in E:\temp to Default
@@ -65,6 +71,7 @@
     [string]$IncludeFilter = '*.doc',
     [ValidateSet('Default','PDF','XPS','HTML')] # Only some of the supported file formats are currently tested
     [string]$TargetFormat = 'Default',
+    [switch]$ResetTemplate, # Resets linked template to 'Normal' template
     [switch]$DeleteExistingFiles
   )
 
@@ -121,6 +128,7 @@
     [string]$SourceFileExtension = '',
     [string]$TargetFileExtension = '',
     [int]$WdSaveFormat = 16, # Default docx
+	[switch]$ResetTemplate, # Resets linked template to 'Normal' template
     [switch]$DeleteFile
   )
 
@@ -134,10 +142,15 @@
       # try to create a new instance of the COM object
       try{
         # New Word instance
+		Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Office\16.0\Word\Options" -Name "UseTimeoutForAttachedTemplateLoad" -Value 00000250
         $WordApplication = New-Object -ComObject Word.Application
+		#$AutoSecurityDisable = New-Object -ComObject Office.MsoAutomationSecurity.msoAutomationSecurityForceDisable
+		# No executa macros com AutoOpen, etc.
+		$WordApplication.WordBasic.DisableAutoMacros()
       }
       catch {
         Write-Error -Message 'Word COM object could not be loaded'
+		Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Office\16.0\Word\Options" -Name "UseTimeoutForAttachedTemplateLoad"
         Exit $ERR_COMOBJECT
       }
 
@@ -147,13 +160,13 @@
         $WordDocument = $WordApplication.Documents.Open($FileSourcePath)
 
         # Replace the source file extenson with the appropriate target file extension 
-        $NewFilePath = ($FileSourcePath).Replace($SourceFileExtension, $TargetFileExtension)
-
+        $NewFilePath = ""+($FileSourcePath).Replace($SourceFileExtension, $(" [MIGRAT]"+$TargetFileExtension))
+        if($ResetTemplate){
+			$WordDocument.AttachedTemplate = "Normal.dotm"
+		}
         if((Test-Path -Path $NewFilePath) -and $DeleteFile) {
-          
           # Delete existing file
           $null = Remove-Item -Path $NewFilePath -Force -Confirm:$false
-
         }
 
         # Now let's save the document
@@ -163,7 +176,8 @@
       catch {
 
         # Ooops
-        Write-Error -Message "Error saving document$($FileSourcePath): ´nException: $($_.Exception.Message)"
+        Write-Error -Message "Error saving document$($FileSourcePath): Â´nException: $($_.Exception.Message)"
+		Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Office\16.0\Word\Options" -Name "UseTimeoutForAttachedTemplateLoad"
         Exit $ERR_WORDSAVEAS
 
       }
@@ -203,21 +217,28 @@
 
       # Let's work on all files
       foreach($File in $SourceFiles) {
-
-        Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
-        
+		if($ResetTemplate){
+          Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat) -ResetTemplate
+		}
+		else {
+	      Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
+		}
       }
     }
     else{
       # It's just a single file
 
       $File = Get-Item -Path $SourcePath
-
-        Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
-
+	  if($ResetTemplate){
+        Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat) -ResetTemplate
+	  }
+       else {
+         Invoke-Word -FileSourcePath $File.FullName -SourceFileExtension $File.Extension -TargetFileExtension $FileExtension.Item($TargetFormat) -WdSaveFormat $wdFormat.Item($TargetFormat)
+	   }
     }
   }
   else {
     Write-Warning -Message 'No document source path has been provided'
+	Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Office\16.0\Word\Options" -Name "UseTimeoutForAttachedTemplateLoad"
     exit $ERR_SOURCEPATHMISSING
   }
